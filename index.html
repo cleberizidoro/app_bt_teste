@@ -1,0 +1,980 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f2933">
+<title>Monitor Inclinômetro</title>
+<!--
+  Monitor visual do Inclinômetro pelo Bluetooth (HM-10, BLE), versão web para celular.
+
+  Mesma função do hm10_monitor.py: mostra LG e LT, o gráfico dos últimos 60 s, o diagnóstico
+  do ICM42688P e o log bruto da placa. Usa Web Bluetooth, disponível no Chrome do Android
+  e no Chrome/Edge do computador; exige HTTPS (GitHub Pages) ou localhost.
+
+  As senhas da placa NÃO ficam neste arquivo: são digitadas na tela na hora de usar.
+-->
+<style>
+  :root {
+    --fundo: #f3f5f7;
+    --cartao: #ffffff;
+    --borda: #e4e7eb;
+    --texto: #1f2933;
+    --suave: #7b8794;
+    --grade: #cbd2d9;
+    --ok: #1f9d55;
+    --erro: #d64545;
+    --lg: #2f6fdd;
+    --lt: #e07b00;
+    --botao: #2f6fdd;
+    --botao-texto: #ffffff;
+    --botao-sec: #e4e7eb;
+    --console: #0f1720;
+    --console-texto: #d9e2ec;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fundo: #11161c;
+      --cartao: #1b222b;
+      --borda: #2a333d;
+      --texto: #e4e7eb;
+      --suave: #8a97a5;
+      --grade: #3e4c59;
+      --ok: #3ebd78;
+      --erro: #ef6b6b;
+      --lg: #6b9cf0;
+      --lt: #f2a541;
+      --botao: #3d7be6;
+      --botao-sec: #2a333d;
+      --console: #0a0f14;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--fundo);
+    color: var(--texto);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    background: var(--cartao);
+    border-bottom: 1px solid var(--borda);
+  }
+  header .titulo { flex: 1; min-width: 0; }
+  header h1 { margin: 0; font-size: 17px; }
+  #status {
+    font-size: 13px;
+    color: var(--suave);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #status.ok { color: var(--ok); }
+  #status.erro { color: var(--erro); }
+
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+    display: grid;
+    gap: 12px;
+  }
+  @media (min-width: 900px) {
+    main { grid-template-columns: 1fr 1fr; }
+    .largo { grid-column: 1 / -1; }
+  }
+
+  .cartao {
+    background: var(--cartao);
+    border: 1px solid var(--borda);
+    border-radius: 12px;
+    padding: 12px;
+    min-width: 0;
+  }
+  .cartao h2 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--suave);
+  }
+
+  #aviso {
+    display: none;
+    background: var(--erro);
+    color: #fff;
+    border: 0;
+  }
+  #aviso.visivel { display: block; }
+
+  .indicadores { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .indicador { text-align: center; }
+  .indicador canvas { width: 100%; aspect-ratio: 1; display: block; }
+  .indicador .valor { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--suave); }
+
+  #grafico { width: 100%; height: 200px; display: block; }
+
+  dl.diag {
+    margin: 0;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 12px;
+  }
+  dl.diag dt { color: var(--suave); }
+  dl.diag dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--ok); }
+  .erro { color: var(--erro); }
+  .inativo { color: var(--suave); }
+
+  button {
+    font: inherit;
+    font-weight: 600;
+    border: 0;
+    border-radius: 10px;
+    padding: 0 14px;
+    min-height: 44px;
+    background: var(--botao);
+    color: var(--botao-texto);
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+  button.sec { background: var(--botao-sec); color: var(--texto); }
+  button.perigo { background: var(--erro); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ativo { background: var(--ok); color: #fff; }
+
+  input {
+    font: inherit;
+    font-size: 16px; /* evita o zoom automático do Chrome no Android */
+    min-height: 44px;
+    padding: 0 10px;
+    border: 1px solid var(--borda);
+    border-radius: 10px;
+    background: var(--fundo);
+    color: var(--texto);
+    min-width: 0;
+  }
+
+  .grade-botoes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .linha { display: flex; gap: 8px; align-items: center; }
+  .linha input { flex: 1; }
+  .campo { display: grid; gap: 4px; margin-top: 12px; }
+  .campo label { font-size: 13px; color: var(--suave); }
+  .prefixo { font-weight: 600; color: var(--suave); }
+
+  #console {
+    height: 240px;
+    overflow-y: auto;
+    margin: 0 0 8px;
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--console);
+    color: var(--console-texto);
+    font: 12px/1.35 ui-monospace, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+  #console .enviado { color: #7cc4fa; }
+  #console .falha { color: #ff9b9b; }
+  .botoes-log { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .botoes-log button { flex: 1 1 auto; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="titulo">
+    <h1 id="nome-dispositivo">Inclinômetro</h1>
+    <div id="status">Desconectado</div>
+  </div>
+  <button id="bt-conexao">Conectar</button>
+</header>
+
+<main>
+  <section id="aviso" class="cartao largo"></section>
+
+  <section class="cartao">
+    <div class="indicadores">
+      <div class="indicador">
+        <h2>Longitudinal (LG)</h2>
+        <canvas id="ind-lg"></canvas>
+        <div class="valor" id="valor-lg">---</div>
+      </div>
+      <div class="indicador">
+        <h2>Transversal (LT)</h2>
+        <canvas id="ind-lt"></canvas>
+        <div class="valor" id="valor-lt">---</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cartao">
+    <h2>Últimos 60 s</h2>
+    <canvas id="grafico"></canvas>
+  </section>
+
+  <section class="cartao">
+    <h2>Diagnóstico</h2>
+    <dl class="diag">
+      <dt>Link sensor</dt><dd id="info-link" class="inativo">---</dd>
+      <dt>WHO_AM_I</dt><dd id="info-whoami">---</dd>
+      <dt>Erros ICM</dt><dd id="info-erros">---</dd>
+      <dt>ICM sem calibração</dt><dd id="info-bruto">---</dd>
+      <dt>Bias giroscópio</dt><dd id="info-bias">---</dd>
+      <dt>Vcc</dt><dd id="info-vcc">---</dd>
+      <dt>Última leitura</dt><dd id="info-ultima">---</dd>
+    </dl>
+  </section>
+
+  <section class="cartao">
+    <h2>Configuração</h2>
+    <div class="grade-botoes">
+      <button class="sec" id="bt-calibra-bias" disabled>Calibrar bias</button>
+      <button class="sec" id="bt-calibra-sensor" disabled>Calibrar sensor</button>
+      <button class="perigo" id="bt-reset-fabrica" disabled>Reset de fábrica</button>
+      <button class="perigo" id="bt-limpa-relatorio" disabled>Limpar relatório</button>
+    </div>
+
+    <div class="campo">
+      <label for="senha">Senha de configuração (não fica salva)</label>
+      <input id="senha" type="password" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </div>
+
+    <div class="campo">
+      <label for="serie">Número de série</label>
+      <div class="linha">
+        <span class="prefixo">INCSR</span>
+        <input id="serie" type="text" inputmode="numeric" maxlength="6" autocomplete="off">
+        <button class="sec" id="bt-grava-serie" disabled>Gravar</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="cartao largo">
+    <h2>Log da placa</h2>
+    <div id="console"></div>
+    <div class="linha">
+      <input id="comando" type="text" placeholder="Comando" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <button class="sec" id="bt-enviar">Enviar</button>
+    </div>
+    <div class="botoes-log">
+      <button class="sec" id="bt-log-on">Log ON</button>
+      <button class="sec" id="bt-log-off">Log OFF</button>
+      <button class="sec" id="bt-csv">Gravar CSV</button>
+    </div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+// Característica serial padrão do HM-10 (serviço FFE0)
+const HM10_SERVICO = 0xffe0;
+const HM10_CARACTERISTICA = 0xffe1;
+
+const PREFIXO_NOME = "INCSR"; // Nome configurado pelo firmware: AT+NAMEINCSR%06Lu
+const COMANDO_LIGA_LOG = "+DA:1,";
+const COMANDO_DESLIGA_LOG = "+DA:0,";
+const COMANDO_CALIBRA_BIAS = "+DE:1,"; // Zera o bias do giroscópio para o firmware recalibrar
+// Comandos protegidos: a senha digitada na tela entra no lugar de {senha}
+const COMANDO_GRAVA_SERIE = "+DB:{senha},DY:{numero},"; // Grava o endereço que compõe o nome INCSR
+const COMANDO_RESET_FABRICA = "+DB:{senha},DD:1,"; // Restaura as configurações de fábrica
+const COMANDO_LIMPA_RELATORIO = "+DB:{senha},DK:1,"; // Apaga os eventos da EEPROM externa
+const SERIE_MAX = 999999; // Número de série com 6 dígitos (ENDERECO_MAX no firmware)
+
+// Pacote binário do protocolo do app (computa_dados_bt): "B", ID, 8 bytes de dados e CRC.
+// O CRC é a soma de 8 bits dos 10 primeiros bytes.
+function montaPacoteApp(idPacote, dados = new Uint8Array(8)) {
+  const pacote = new Uint8Array(11);
+  pacote[0] = 0x42; // "B"
+  pacote[1] = idPacote;
+  pacote.set(dados, 2);
+  pacote[10] = pacote.slice(0, 10).reduce((soma, b) => soma + b, 0) & 0xff;
+  return pacote;
+}
+
+const PACOTE_CALIBRA_INCLINACAO = montaPacoteApp(10); // Zera LG e LT na posição atual; a placa responde com o pacote OK (ID 1)
+const PACOTE_APP_TAMANHO = 11;
+
+// Linhas impressas pelo firmware em comunicacao_serial()
+const RE_INCLINACAO = /^LG:\s*(-?[\d.]+)\s*G,\s*LT:\s*(-?[\d.]+)\s*G,\s*link:\s*(\d+)/;
+const RE_ICM_BRUTO = /^ICM bruto LG:\s*(-?[\d.]+),\s*LT:\s*(-?[\d.]+)\s*\|\s*erros:\s*(\d+)\s*\|\s*bias X:\s*(-?\d+),\s*Y:\s*(-?\d+)/;
+const RE_SERIE_GRAVADA = /^\+DY:(\d+)/;
+const RE_MENSAGEM = /^\+(?:\w\w:[^,]*,)*DF:(.*)/;
+const RE_WHOAMI = /^ICM WHO_AM_I:\s*init\s*(0x[0-9A-Fa-f]+),\s*agora\s*(0x[0-9A-Fa-f]+)/;
+const RE_VCC = /^Vcc:\s*([\d.]+)\s*V/;
+
+const CAMPOS_CSV = ["hora", "lg", "lt", "link", "icm_lg_bruto", "icm_lt_bruto", "icm_erros", "bias_x", "bias_y"];
+
+const WHO_AM_I_ESPERADO = "0x47";
+const TEMPO_RESPOSTA_APP = 3000; // ms
+// Um pacote do app faz o firmware ligar o link_ble, que desliga o log e ignora comandos de texto
+// até passar BT_LIMITE_ERRO (2,0 s) sem novos pacotes
+const TEMPO_LINK_APP = 2500; // ms
+const JANELA_GRAFICO = 60; // s
+const MAX_LINHAS_CONSOLE = 500;
+
+const $ = (id) => document.getElementById(id);
+const espera = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------------------------
+// Conexão BLE
+
+let dispositivo = null;
+let caracteristica = null;
+let conectado = false;
+let conectando = false;
+let calibrando = false;
+let buffer = "";
+let bruto = new Uint8Array(0);
+let respostaApp = null; // Resolve da resposta binária aguardada na calibração
+let filaEscrita = Promise.resolve();
+let travaTela = null;
+
+async function conecta() {
+  let escolhido;
+  try {
+    escolhido = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: PREFIXO_NOME }],
+      optionalServices: [HM10_SERVICO],
+    });
+  } catch (e) {
+    if (e.name !== "NotFoundError") erro(e); // NotFoundError: o usuário fechou a lista
+    return;
+  }
+
+  conectando = true;
+  atualizaBotoes();
+  status(`Conectando a ${escolhido.name}...`);
+  try {
+    dispositivo = escolhido;
+    // Propriedade em vez de addEventListener para não acumular tratadores ao reconectar
+    dispositivo.ongattserverdisconnected = desconectado;
+    const servidor = await dispositivo.gatt.connect();
+    const servico = await servidor.getPrimaryService(HM10_SERVICO);
+    caracteristica = await servico.getCharacteristic(HM10_CARACTERISTICA);
+    caracteristica.oncharacteristicvaluechanged = recebe;
+    buffer = "";
+    bruto = new Uint8Array(0);
+    await caracteristica.startNotifications();
+  } catch (e) {
+    conectando = false;
+    if (dispositivo && dispositivo.gatt.connected) dispositivo.gatt.disconnect();
+    caracteristica = null;
+    atualizaBotoes();
+    erro(e);
+    return;
+  }
+
+  conectando = false;
+  conectado = true;
+  $("nome-dispositivo").textContent = dispositivo.name;
+  // Preenche o número de série atual a partir do nome anunciado
+  const numero = dispositivo.name.slice(PREFIXO_NOME.length);
+  if (dispositivo.name.startsWith(PREFIXO_NOME) && /^\d+$/.test(numero)) $("serie").value = String(Number(numero));
+  limpaGrafico();
+  status("Conectado", "ok");
+  atualizaBotoes();
+  mantemTelaLigada();
+
+  // O HM-10 envia "OK+CONN" para a placa ao conectar, e o firmware desliga o log ao
+  // receber "OK+". Espera essa mensagem passar antes de ligar o log.
+  await espera(1500);
+  await envia(COMANDO_LIGA_LOG);
+}
+
+async function desconecta() {
+  if (!conectado) return;
+  try {
+    await envia(COMANDO_DESLIGA_LOG);
+  } catch (_) {
+    // A conexão já pode ter caído
+  }
+  dispositivo.gatt.disconnect();
+}
+
+function desconectado() {
+  // Chamado quando a conexão cai, inclusive por perda de sinal
+  conectado = false;
+  conectando = false;
+  caracteristica = null;
+  if (respostaApp) respostaApp(null);
+  status("Desconectado", "erro");
+  desenhaIndicadores(null, null, false);
+  $("info-link").textContent = "---";
+  $("info-link").className = "inativo";
+  atualizaBotoes();
+  liberaTela();
+}
+
+// Escritas em fila: o Chrome recusa uma operação GATT enquanto outra está em andamento
+function escreve(bytes) {
+  const operacao = filaEscrita.then(async () => {
+    if (!caracteristica) throw new Error("Não conectado");
+    // O HM-10 aceita no máximo 20 bytes por escrita
+    for (let i = 0; i < bytes.length; i += 20) {
+      await caracteristica.writeValueWithoutResponse(bytes.slice(i, i + 20));
+    }
+  });
+  filaEscrita = operacao.catch(() => {});
+  return operacao;
+}
+
+async function envia(texto) {
+  if (!conectado) {
+    status("Não conectado", "erro");
+    return;
+  }
+  const dados = Uint8Array.from(texto, (c) => c.charCodeAt(0) & 0xff); // latin-1
+  await escreve(dados);
+  // A senha nunca aparece no log da tela
+  escreveConsole(">>> " + texto.replace(/DB:[^,]*/g, "DB:****"), "enviado");
+}
+
+function enviaComErro(texto) {
+  envia(texto).catch(erro);
+}
+
+async function calibraInclinacao() {
+  bruto = new Uint8Array(0);
+  const aguardaResposta = new Promise((resolve) => { respostaApp = resolve; });
+  let resposta;
+  try {
+    await escreve(PACOTE_CALIBRA_INCLINACAO);
+    escreveConsole(">>> [app] " + hex(PACOTE_CALIBRA_INCLINACAO), "enviado");
+    resposta = await Promise.race([aguardaResposta, espera(TEMPO_RESPOSTA_APP).then(() => null)]);
+  } catch (e) {
+    trataCalibracao(undefined); // Libera o botão; o erro segue para o status
+    erro(e);
+    return;
+  } finally {
+    respostaApp = null;
+    // O que sobrou aguardando o pacote completo volta a ser texto
+    const sobra = bruto;
+    bruto = new Uint8Array(0);
+    remontaLinhas(sobra);
+  }
+  trataCalibracao(resposta);
+
+  // Religa o log, desligado pelo firmware ao receber o pacote do app
+  await espera(TEMPO_LINK_APP);
+  if (conectado) await envia(COMANDO_LIGA_LOG).catch(erro);
+}
+
+function procuraRespostaApp(dados) {
+  // Início do pacote OK (ID 1) ou NOk (ID 2) enviado pela placa
+  for (let i = 0; i < dados.length - 1; i++) {
+    if (dados[i] === 0x42 && (dados[i + 1] === 1 || dados[i + 1] === 2)) return i;
+  }
+  return -1;
+}
+
+// Retira do fluxo a resposta binária aguardada e devolve o restante, que é texto do log
+function separaPacoteApp(dados) {
+  bruto = junta(bruto, dados);
+  const i = procuraRespostaApp(bruto);
+  let texto;
+  if (i < 0) {
+    // Um "B" no fim pode ser o início do pacote, que chega na próxima notificação
+    const corte = bruto.length && bruto[bruto.length - 1] === 0x42 ? bruto.length - 1 : bruto.length;
+    texto = bruto.slice(0, corte);
+    bruto = bruto.slice(corte);
+    return texto;
+  }
+  if (bruto.length - i < PACOTE_APP_TAMANHO) {
+    texto = bruto.slice(0, i);
+    bruto = bruto.slice(i);
+    return texto;
+  }
+  const pacote = bruto.slice(i, i + PACOTE_APP_TAMANHO);
+  texto = junta(bruto.slice(0, i), bruto.slice(i + PACOTE_APP_TAMANHO));
+  bruto = new Uint8Array(0);
+  const resolve = respostaApp;
+  respostaApp = null;
+  resolve(pacote);
+  return texto;
+}
+
+function recebe(evento) {
+  const valor = evento.target.value;
+  let dados = new Uint8Array(valor.buffer.slice(valor.byteOffset, valor.byteOffset + valor.byteLength));
+  if (respostaApp) dados = separaPacoteApp(dados);
+  remontaLinhas(dados);
+}
+
+function remontaLinhas(dados) {
+  // O HM-10 entrega pacotes de até 20 bytes; remonta as linhas pelo "\n"
+  for (const b of dados) buffer += String.fromCharCode(b); // latin-1
+  let fim;
+  while ((fim = buffer.indexOf("\n")) >= 0) {
+    const linha = buffer.slice(0, fim).replace(/\r/g, "");
+    buffer = buffer.slice(fim + 1);
+    if (linha) trataLinha(linha);
+  }
+}
+
+function junta(a, b) {
+  const r = new Uint8Array(a.length + b.length);
+  r.set(a);
+  r.set(b, a.length);
+  return r;
+}
+
+function hex(bytes) {
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+}
+
+// Sem isso o Android apaga a tela e o Chrome suspende a página, derrubando a conexão
+async function mantemTelaLigada() {
+  try {
+    if ("wakeLock" in navigator && !travaTela) {
+      travaTela = await navigator.wakeLock.request("screen");
+      travaTela.addEventListener("release", () => { travaTela = null; });
+    }
+  } catch (_) {
+    // Sem suporte ou bateria fraca: segue sem a trava
+  }
+}
+
+function liberaTela() {
+  if (travaTela) travaTela.release();
+  travaTela = null;
+}
+
+document.addEventListener("visibilitychange", () => {
+  // O sistema solta a trava quando a página vai para segundo plano
+  if (document.visibilityState === "visible" && conectado) mantemTelaLigada();
+});
+
+// ---------------------------------------------------------------------------------------------
+// Tratamento das linhas do log
+
+let valoresCsv = {};
+let linhasCsv = null; // null = não está gravando
+
+function trataLinha(linha) {
+  escreveConsole(linha);
+  const hora = horaAtual(true);
+  let m;
+
+  // Respostas dos comandos de configuração
+  if ((m = RE_SERIE_GRAVADA.exec(linha))) {
+    status(`Número de série gravado: ${PREFIXO_NOME}${m[1].padStart(6, "0")}`, "ok");
+    return;
+  }
+
+  if ((m = RE_MENSAGEM.exec(linha))) {
+    const mensagem = m[1].trim();
+    const falhou = ["NAO OK", "INSERIR SENHA", "FORA DO RANGE"].some((t) => mensagem.includes(t));
+    status(mensagem, falhou ? "erro" : "ok");
+    return;
+  }
+
+  if ((m = RE_WHOAMI.exec(linha))) {
+    const ok = m[1].toLowerCase() === WHO_AM_I_ESPERADO && m[2].toLowerCase() === WHO_AM_I_ESPERADO;
+    info("whoami", `init ${m[1]}, agora ${m[2]}`, ok ? "ok" : "erro");
+    return;
+  }
+
+  if ((m = RE_ICM_BRUTO.exec(linha))) {
+    const erros = Number(m[3]);
+    info("bruto", `LG ${sinal(Number(m[1]))}°  LT ${sinal(Number(m[2]))}°`);
+    info("erros", String(erros), erros === 0 ? "ok" : "erro");
+    const calibrado = m[4] !== "0" || m[5] !== "0";
+    info("bias", `X ${m[4]}  Y ${m[5]}` + (calibrado ? "" : "  (aguardando)"), calibrado ? "" : "inativo");
+    Object.assign(valoresCsv, {
+      icm_lg_bruto: m[1], icm_lt_bruto: m[2], icm_erros: m[3], bias_x: m[4], bias_y: m[5],
+    });
+    return;
+  }
+
+  if ((m = RE_VCC.exec(linha))) {
+    info("vcc", `${Number(m[1]).toFixed(3)} V`);
+    return;
+  }
+
+  // A linha "LG/LT" fecha cada bloco do log
+  if ((m = RE_INCLINACAO.exec(linha))) {
+    const lg = Number(m[1]), lt = Number(m[2]), link = m[3] === "1";
+    desenhaIndicadores(lg, lt, link);
+    adicionaGrafico(lg, lt);
+    info("link", link ? "OK" : "SEM LINK", link ? "ok" : "erro");
+    info("ultima", hora);
+
+    if (linhasCsv) {
+      Object.assign(valoresCsv, { hora, lg: m[1], lt: m[2], link: m[3] });
+      linhasCsv.push(CAMPOS_CSV.map((c) => valoresCsv[c] ?? "").join(";"));
+    }
+    valoresCsv = {};
+  }
+}
+
+function trataCalibracao(resposta) {
+  calibrando = false;
+  atualizaBotoes();
+  if (resposta === undefined) return;
+  if (resposta === null) {
+    status("Calibrar sensor: sem resposta da placa", "erro");
+    escreveConsole("!!! Calibrar sensor: sem resposta da placa", "falha");
+    return;
+  }
+  escreveConsole("<<< [app] " + hex(resposta));
+  const crcOk = (resposta.slice(0, -1).reduce((s, b) => s + b, 0) & 0xff) === resposta[resposta.length - 1];
+  if (crcOk && resposta[1] === 1) {
+    // O firmware responde OK mesmo quando não calibra (sem link ou sem setpoint): conferir LG/LT no log
+    status("Calibração aceita: LG e LT devem ir para 0,0° quando o log voltar", "ok");
+  } else {
+    status("Calibrar sensor: placa respondeu com erro", "erro");
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ações dos botões
+
+function comandoProtegido(modelo, valores = {}) {
+  const senha = $("senha").value.trim();
+  if (!senha) {
+    status("Informe a senha de configuração", "erro");
+    $("senha").focus();
+    return null;
+  }
+  return Object.entries({ senha, ...valores }).reduce((t, [k, v]) => t.replace(`{${k}}`, v), modelo);
+}
+
+$("bt-conexao").onclick = () => (conectado ? desconecta() : conecta());
+
+$("bt-calibra-bias").onclick = () => {
+  // O firmware só aceita as amostras se o giroscópio ficar estável durante a coleta
+  if (confirm(
+    "O bias do giroscópio será zerado, recalculado pela placa e gravado na EEPROM.\n\n" +
+    "Mantenha o inclinômetro parado até o bias voltar a aparecer no diagnóstico."
+  )) enviaComErro(COMANDO_CALIBRA_BIAS);
+};
+
+$("bt-calibra-sensor").onclick = () => {
+  // Mesmo pacote do app (ID 10): o firmware grava a leitura atual como zero de LG e LT
+  if (confirm(
+    "A posição atual do inclinômetro passará a ser o zero de LG e LT, gravado na EEPROM.\n\n" +
+    "Deixe o equipamento nivelado e parado. A placa só calibra com o sensor com link OK " +
+    "e pelo menos um setpoint de inclinação diferente de zero.\n\n" +
+    "O log fica pausado por cerca de 3 s durante o comando."
+  )) {
+    calibrando = true;
+    atualizaBotoes();
+    status("Calibrando sensor...");
+    calibraInclinacao();
+  }
+};
+
+$("bt-reset-fabrica").onclick = () => {
+  const comando = comandoProtegido(COMANDO_RESET_FABRICA);
+  if (comando && confirm(
+    "Todas as configurações (entradas, setpoints, calibração de inclinação, opcionais, tempos e senha) " +
+    "voltarão aos valores de fábrica.\n\nDeseja continuar?"
+  )) enviaComErro(comando);
+};
+
+$("bt-limpa-relatorio").onclick = () => {
+  // O firmware apaga toda a EEPROM externa; leva cerca de 8 s
+  const comando = comandoProtegido(COMANDO_LIMPA_RELATORIO);
+  if (comando && confirm(
+    "Todos os eventos gravados no relatório serão apagados.\n\n" +
+    "A placa leva cerca de 8 s e responde \"RELATORIO LIMPO\" no log ao terminar.\n\nDeseja continuar?"
+  )) enviaComErro(comando);
+};
+
+$("bt-grava-serie").onclick = () => {
+  const texto = $("serie").value.trim();
+  if (!/^\d+$/.test(texto) || Number(texto) > SERIE_MAX) {
+    alert(`Informe um número entre 0 e ${SERIE_MAX}.`);
+    return;
+  }
+  const numero = Number(texto);
+  const comando = comandoProtegido(COMANDO_GRAVA_SERIE, { numero });
+  if (comando && confirm(
+    `Gravar o número de série ${numero}?\n\n` +
+    `O módulo Bluetooth será renomeado para ${PREFIXO_NOME}${String(numero).padStart(6, "0")} e a conexão vai cair. ` +
+    "Depois toque em Conectar para encontrá-lo com o novo nome."
+  )) enviaComErro(comando);
+};
+
+function enviaEntrada() {
+  const texto = $("comando").value.trim();
+  if (texto) {
+    enviaComErro(texto);
+    $("comando").value = "";
+  }
+}
+$("bt-enviar").onclick = enviaEntrada;
+$("comando").addEventListener("keydown", (e) => { if (e.key === "Enter") enviaEntrada(); });
+$("bt-log-on").onclick = () => enviaComErro(COMANDO_LIGA_LOG);
+$("bt-log-off").onclick = () => enviaComErro(COMANDO_DESLIGA_LOG);
+
+// No navegador não dá para ir gravando num arquivo: as linhas ficam na memória
+// e o CSV é baixado ao parar a gravação
+$("bt-csv").onclick = () => {
+  if (!linhasCsv) {
+    linhasCsv = [CAMPOS_CSV.join(";")];
+    valoresCsv = {};
+    $("bt-csv").textContent = "Parar e baixar CSV";
+    $("bt-csv").classList.add("ativo");
+    status("Gravando CSV", "ok");
+    return;
+  }
+  const d = new Date();
+  const dois = (n) => String(n).padStart(2, "0");
+  const nome = `log_inclinometro_${d.getFullYear()}${dois(d.getMonth() + 1)}${dois(d.getDate())}_` +
+               `${dois(d.getHours())}${dois(d.getMinutes())}${dois(d.getSeconds())}.csv`;
+  // BOM para o Excel reconhecer o UTF-8
+  const arquivo = new Blob(["\ufeff" + linhasCsv.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(arquivo);
+  link.download = nome;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+  status(`${linhasCsv.length - 1} leituras salvas em ${nome}`, "ok");
+  linhasCsv = null;
+  $("bt-csv").textContent = "Gravar CSV";
+  $("bt-csv").classList.remove("ativo");
+};
+
+function atualizaBotoes() {
+  const bt = $("bt-conexao");
+  bt.textContent = conectado ? "Desconectar" : conectando ? "Conectando..." : "Conectar";
+  bt.className = conectado ? "sec" : "";
+  bt.disabled = conectando || !navigator.bluetooth;
+  for (const id of ["bt-calibra-bias", "bt-reset-fabrica", "bt-limpa-relatorio", "bt-grava-serie",
+                    "bt-enviar", "bt-log-on", "bt-log-off"]) {
+    $(id).disabled = !conectado;
+  }
+  $("bt-calibra-sensor").disabled = !conectado || calibrando;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Tela
+
+function status(texto, tipo = "") {
+  $("status").textContent = texto;
+  $("status").className = tipo;
+}
+
+function erro(e) {
+  const texto = e && e.message ? `${e.name}: ${e.message}` : String(e);
+  status(texto, "erro");
+  escreveConsole("!!! " + texto, "falha");
+  atualizaBotoes();
+}
+
+function info(chave, texto, classe = "") {
+  const el = $("info-" + chave);
+  el.textContent = texto;
+  el.className = classe;
+}
+
+function sinal(v) {
+  return (v >= 0 ? "+" : "") + v.toFixed(1);
+}
+
+function horaAtual(comMs) {
+  const d = new Date();
+  const h = [d.getHours(), d.getMinutes(), d.getSeconds()].map((n) => String(n).padStart(2, "0")).join(":");
+  return comMs ? h + "." + String(d.getMilliseconds()).padStart(3, "0") : h;
+}
+
+function escreveConsole(texto, classe) {
+  const console_ = $("console");
+  // Só acompanha o fim se o usuário não estiver lendo linhas antigas
+  const noFim = console_.scrollHeight - console_.scrollTop - console_.clientHeight < 30;
+  const linha = document.createElement("div");
+  linha.textContent = `${horaAtual(false)}  ${texto}`;
+  if (classe) linha.className = classe;
+  console_.appendChild(linha);
+  while (console_.childElementCount > MAX_LINHAS_CONSOLE) console_.firstElementChild.remove();
+  if (noFim) console_.scrollTop = console_.scrollHeight;
+}
+
+function cor(nome) {
+  return getComputedStyle(document.documentElement).getPropertyValue("--" + nome).trim();
+}
+
+// Ajusta a resolução do canvas à tela (celulares têm 2x ou 3x pixels por ponto)
+function preparaCanvas(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+// Indicador circular: linha inclinada sobre a referência horizontal
+let ultimaInclinacao = { lg: null, lt: null, link: false };
+
+function desenhaIndicadores(lg, lt, link) {
+  ultimaInclinacao = { lg, lt, link };
+  desenhaInclinometro($("ind-lg"), $("valor-lg"), cor("lg"), lg, link);
+  desenhaInclinometro($("ind-lt"), $("valor-lt"), cor("lt"), lt, link);
+}
+
+function desenhaInclinometro(canvas, valor, corLinha, angulo, link) {
+  const { ctx, w, h } = preparaCanvas(canvas);
+  if (w < 20) return;
+  const cx = w / 2, cy = h / 2, r = Math.min(w, h) * 0.44;
+  const grade = cor("grade");
+
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = grade;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+  ctx.stroke();
+
+  // Marcas a cada 15° nos dois lados
+  for (let g = -90; g <= 90; g += 15) {
+    const a = g * Math.PI / 180;
+    const tam = r * (g % 45 === 0 ? 0.1 : 0.05);
+    for (const lado of [1, -1]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + lado * r * Math.cos(a), cy - lado * r * Math.sin(a));
+      ctx.lineTo(cx + lado * (r - tam) * Math.cos(a), cy - lado * (r - tam) * Math.sin(a));
+      ctx.stroke();
+    }
+  }
+
+  // Referência horizontal
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx - r, cy);
+  ctx.lineTo(cx + r, cy);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  if (angulo === null) {
+    valor.textContent = "---";
+    valor.style.color = "";
+    return;
+  }
+  const c = link ? corLinha : cor("erro");
+  const a = angulo * Math.PI / 180;
+  const dx = r * 0.92 * Math.cos(a), dy = r * 0.92 * Math.sin(a);
+  ctx.strokeStyle = c;
+  ctx.fillStyle = c;
+  ctx.lineWidth = Math.max(4, r * 0.06);
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(cx - dx, cy + dy);
+  ctx.lineTo(cx + dx, cy - dy);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(cx, cy, Math.max(5, r * 0.06), 0, 2 * Math.PI);
+  ctx.fill();
+
+  valor.textContent = sinal(angulo) + "°";
+  valor.style.color = c;
+}
+
+// Gráfico de LG e LT nos últimos JANELA_GRAFICO segundos
+const amostras = [];
+
+function adicionaGrafico(lg, lt) {
+  const agora = performance.now() / 1000;
+  amostras.push([agora, lg, lt]);
+  while (amostras.length && agora - amostras[0][0] > JANELA_GRAFICO) amostras.shift();
+  desenhaGrafico();
+}
+
+function limpaGrafico() {
+  amostras.length = 0;
+  desenhaGrafico();
+}
+
+function desenhaGrafico() {
+  const { ctx, w, h } = preparaCanvas($("grafico"));
+  if (w < 100 || h < 60) return;
+
+  const esq = 42, dir = 8, topo = 8, base = 20;
+  const agora = performance.now() / 1000;
+  const maior = amostras.reduce((m, [, lg, lt]) => Math.max(m, Math.abs(lg), Math.abs(lt)), 0);
+  const limite = Math.max(10, Math.ceil(maior / 10) * 10);
+  const y = (v) => topo + (h - topo - base) * (limite - v) / (2 * limite);
+  const x = (t) => esq + (w - esq - dir) * (1 - (agora - t) / JANELA_GRAFICO);
+
+  ctx.font = "11px system-ui, sans-serif";
+  ctx.lineWidth = 1;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (const v of [-limite, -limite / 2, 0, limite / 2, limite]) {
+    ctx.strokeStyle = cor("grade");
+    ctx.setLineDash(v === 0 ? [] : [2, 4]);
+    ctx.beginPath();
+    ctx.moveTo(esq, y(v));
+    ctx.lineTo(w - dir, y(v));
+    ctx.stroke();
+    ctx.fillStyle = cor("texto");
+    ctx.fillText((v > 0 ? "+" : "") + v.toFixed(0) + "°", esq - 6, y(v));
+  }
+  ctx.setLineDash([]);
+
+  // Em tela estreita, rótulo de tempo a cada 20 s para não encavalar
+  const passo = w < 400 ? 20 : 10;
+  ctx.textAlign = "center";
+  ctx.fillStyle = cor("suave");
+  for (let s = 0; s <= JANELA_GRAFICO; s += passo) {
+    ctx.fillText(s ? `-${s}s` : "agora", Math.min(x(agora - s), w - 18), h - 8);
+  }
+
+  ctx.font = "bold 12px system-ui, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  [[1, "lg", "LG"], [2, "lt", "LT"]].forEach(([indice, nomeCor, nome], n) => {
+    const c = cor(nomeCor);
+    ctx.strokeStyle = c;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    amostras.forEach((a, i) => (i ? ctx.lineTo(x(a[0]), y(a[indice])) : ctx.moveTo(x(a[0]), y(a[indice]))));
+    ctx.stroke();
+    ctx.fillStyle = c;
+    ctx.fillText(nome, esq + 8 + n * 34, topo + 2);
+  });
+}
+
+function redesenha() {
+  desenhaIndicadores(ultimaInclinacao.lg, ultimaInclinacao.lt, ultimaInclinacao.link);
+  desenhaGrafico();
+}
+
+new ResizeObserver(redesenha).observe(document.querySelector("main"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redesenha);
+
+// ---------------------------------------------------------------------------------------------
+// Início
+
+if (!navigator.bluetooth) {
+  const aviso = $("aviso");
+  aviso.textContent = window.isSecureContext
+    ? "Este navegador não tem Web Bluetooth. Use o Chrome no Android ou o Chrome/Edge no computador."
+    : "O Bluetooth só funciona com a página aberta por HTTPS ou localhost.";
+  aviso.classList.add("visivel");
+  status("Bluetooth indisponível", "erro");
+}
+atualizaBotoes();
+redesenha();
+</script>
+</body>
+</html>

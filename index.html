@@ -188,6 +188,9 @@
   }
   #console .enviado { color: #7cc4fa; }
   #console .falha { color: #ff9b9b; }
+  .cabecalho { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+  .cabecalho h2 { margin: 0; }
+  button.pequeno { min-height: 36px; padding: 0 12px; font-size: 13px; }
   .botoes-log { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .botoes-log button { flex: 1 1 auto; }
 </style>
@@ -221,7 +224,10 @@
   </section>
 
   <section class="cartao">
-    <h2>Últimos 60 s</h2>
+    <div class="cabecalho">
+      <h2>Últimos 60 s</h2>
+      <button class="sec pequeno" id="bt-limpa-grafico">Limpar gráfico</button>
+    </div>
     <canvas id="grafico"></canvas>
   </section>
 
@@ -273,6 +279,7 @@
       <button class="sec" id="bt-log-on">Log ON</button>
       <button class="sec" id="bt-log-off">Log OFF</button>
       <button class="sec" id="bt-csv">Gravar CSV</button>
+      <button class="sec" id="bt-limpa-log">Limpar log</button>
     </div>
   </section>
 </main>
@@ -645,6 +652,8 @@ function trataCalibracao(resposta) {
 
 function comandoProtegido(modelo, valores = {}) {
   const senha = $("senha").value.trim();
+  // A senha vale para um comando só: o próximo exige digitar de novo
+  $("senha").value = "";
   if (!senha) {
     status("Informe a senha de configuração", "erro");
     $("senha").focus();
@@ -721,6 +730,8 @@ $("bt-enviar").onclick = enviaEntrada;
 $("comando").addEventListener("keydown", (e) => { if (e.key === "Enter") enviaEntrada(); });
 $("bt-log-on").onclick = () => enviaComErro(COMANDO_LIGA_LOG);
 $("bt-log-off").onclick = () => enviaComErro(COMANDO_DESLIGA_LOG);
+$("bt-limpa-log").onclick = () => $("console").replaceChildren();
+$("bt-limpa-grafico").onclick = limpaGrafico;
 
 // No navegador não dá para ir gravando num arquivo: as linhas ficam na memória
 // e o CSV é baixado ao parar a gravação
